@@ -53,9 +53,20 @@ import type { OrcaRuntimeService } from '../../orca-runtime'
 import { appendOrcaChatCard } from '../../orca-chat-card'
 import { defineMethod, InvalidArgumentError } from '../core'
 import { refuseFromLook, targetBot } from './bots-tools-target'
+import { structuredAgentConfiguredArgs } from '../../../native-chat/agent-launch/structured-agent-configured-args'
+import { codexStructuredLaunchArgs } from '../../../codex/structured/launch/codex-structured-launch-args'
 
 const botToolSignInFolder = (botId: string): string =>
   join(getProfileUserDataPath(), 'bot-tool-sign-in', botId)
+
+/** The Codex Arguments a chat launches app-server with; none when they can't launch one anyway. */
+function codexChatAppServerArgs(settings: Parameters<typeof structuredAgentConfiguredArgs>[1]) {
+  try {
+    return codexStructuredLaunchArgs(structuredAgentConfiguredArgs('codex', settings))
+  } catch {
+    return []
+  }
+}
 
 /** The bot's tools on this host, with the agent CLI and account its next turn runs for Claude Code and Codex. */
 export async function botToolsHome(runtime: OrcaRuntimeService, bot: Bot): Promise<BotToolsHome> {
@@ -89,7 +100,10 @@ export async function botToolsHome(runtime: OrcaRuntimeService, bot: Bot): Promi
       command,
       prefixArgs: [...prefixArgs],
       env: cliEnv,
-      accountHome: agent === 'claude' ? cliEnv.CLAUDE_CONFIG_DIR?.trim() || null : home
+      accountHome: agent === 'claude' ? cliEnv.CLAUDE_CONFIG_DIR?.trim() || null : home,
+      ...(agent === 'codex'
+        ? { appServerArgs: codexChatAppServerArgs(sources.commandSettings) }
+        : {})
     }
   } finally {
     release.abort()

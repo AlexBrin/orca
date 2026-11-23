@@ -1,12 +1,10 @@
 // A bot's tools on the host that runs it: kept in its home folder, checked and signed in through its
 // agent's own CLI, under the account its next turn uses.
 import { BotFailureError } from '../../shared/bots/bot-failure-copy'
-import { setTimeout as delay } from 'node:timers/promises'
 import { mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { runProcess } from '@orca/process-host'
-import { z } from 'zod'
 import type {
   BotInheritedTool,
   BotToolProblem,
@@ -23,12 +21,14 @@ import {
   readClaudeMirror
 } from './bot-tools-claude'
 import {
-  codexBotToolsThreadConfig,
+  codexTakenToolProblem,
   codexTakenToolProblems,
-  codexToolProblems,
+  settledCodexToolProblems,
   readCodexInheritedToolNames,
+  codexThread,
   readCodexStdioToolNames
 } from './bot-tools-codex'
+import { codexRefusedServerNames, codexServerKindsOf } from './bot-tools-codex-conflicts'
 import {
   botOwnTool,
   readBotToolServers,
@@ -39,7 +39,7 @@ import { resolveBotToolInput } from './bot-tool-details'
 import { claudeBotToolProblems } from './bot-tools-claude-check'
 import { acpLaunchSpecFor } from '../acp/launch/acp-launch-registry'
 import { redactBotToolProblems } from './bot-tool-redaction'
-import { cliWithLaunchTools, withRelayProblems, type BotLaunchTools } from './bot-launch-tools'
+import { cliWithLaunchTools, withRelayProblems } from './bot-launch-tools'
 import type { BotAgent } from '../../shared/bot-types'
 import { readBotToolOAuth, withSavedBotToolHeaders } from './bot-tool-credentials'
 
@@ -60,6 +60,9 @@ export type BotToolsCli = BotToolsFolder & {
   env: Record<string, string>
   /** Claude: its config dir when not the default; Codex: its CODEX_HOME. */
   accountHome: string | null
+  /** Codex: the root options a chat's app-server gets from the Codex Arguments setting, such as
+   *  `-c` overrides, so a check here loads the config the bot's chats do. */
+  appServerArgs?: readonly string[]
 }
 
 /** A bot's tools on this host. Only Claude Code and Codex have a CLI Orca checks and signs them in
@@ -70,8 +73,6 @@ export type BotToolsHome =
 
 export const hasBotToolsCli = (home: BotToolsHome): home is BotToolsCli =>
   home.agent === 'claude' || home.agent === 'codex'
-
-const StartedThread = z.object({ thread: z.object({ id: z.string() }) })
 
 const CLI_TIMEOUT_MS = 60_000
 
@@ -97,7 +98,7 @@ export function codexSession<T>(
   return runCodexAppServerSession(
     {
       command: cli.command,
-      args: [...cli.prefixArgs, 'app-server'],
+      args: [...cli.prefixArgs, ...(cli.appServerArgs ?? []), 'app-server'],
       cwd: cli.folder,
       cliPath: cli.command,
       env: cliEnv(cli),
@@ -106,28 +107,10 @@ export function codexSession<T>(
       signal
     },
     body
-  ).catch(() => {
-    throw new BotFailureError('toolCodexCheckFailed')
+  ).catch((error: unknown) => {
+    // A typed reason (such as a taken name) says more than that the check failed.
+    throw error instanceof BotFailureError ? error : new BotFailureError('toolCodexCheckFailed')
   })
-}
-
-/** A thread in the bot folder with the bot's own servers, as its turns start one. */
-export async function codexThread(
-  rpc: Parameters<Parameters<typeof runCodexAppServerSession>[1]>[0],
-  cli: BotToolsCli,
-  tools: BotLaunchTools,
-  ownerStdioNames: readonly string[]
-): Promise<string> {
-  const started = await rpc.request('thread/start', {
-    cwd: cli.folder,
-    ephemeral: true,
-    config: codexBotToolsThreadConfig(tools, ownerStdioNames)
-  })
-  const id = StartedThread.safeParse(started).data?.thread.id
-  if (!id) {
-    throw new BotFailureError('toolCodexNoThread')
-  }
-  return id
 }
 
 /** The tools the bot gets from its owner's own Claude Code or Codex config; none read for another agent. */
@@ -216,18 +199,17 @@ export async function botToolProblems(
   // Codex runs the owner's stdio server of a taken name instead, even for a tool Orca signs in to.
   const ownerStdioNames = cli.agent === 'codex' ? await codexStdioToolNames(cli) : []
   const taken = codexTakenToolProblems(scoped, ownerStdioNames)
+  const candidates = scoped.filter((server) => !Object.hasOwn(taken, server.name))
   // A tool Orca signs in to has its state from Orca's own store; checking it would start it.
-  const servers = scoped.filter(
+  const servers = candidates.filter(
     (server) =>
-      !Object.hasOwn(taken, server.name) &&
       !('url' in server && server.credential && readBotToolOAuth(cli.folder, server.credential))
   )
   // Another agent has no CLI check, so its rows show no problem, as a Claude or Codex row it confirmed.
-  if (servers.length === 0 || !hasBotToolsCli(cli)) {
+  if (!hasBotToolsCli(cli) || (cli.agent === 'claude' ? servers : candidates).length === 0) {
     return taken
   }
   signal?.throwIfAborted()
-  const names = servers.map((server) => server.name)
   const launch = await cliWithLaunchTools(cli, servers)
   if (cli.agent === 'claude') {
     return withRelayProblems(
@@ -240,23 +222,34 @@ export async function botToolProblems(
     launch.cli,
     CLI_TIMEOUT_MS,
     async (rpc) => {
-      const threadId = await codexThread(rpc, launch.cli, launch.tools, ownerStdioNames)
-      const deadline = Date.now() + 30_000
-      let problems: Map<string, BotToolProblem>
-      do {
-        signal?.throwIfAborted()
-        const answer = await rpc.request('mcpServerStatus/list', {
-          threadId,
-          detail: 'toolsAndAuthOnly'
-        })
-        problems = codexToolProblems(answer, names)
-        if (![...problems.values()].some((problem) => problem.kind === 'unconfirmed')) {
-          break
+      // Every candidate, a signed-in one too (reading the config connects nothing): a chat leaves
+      // out one Codex's config has under its name as the other kind.
+      const refused = await codexRefusedServerNames(
+        rpc,
+        launch.cli.folder,
+        codexServerKindsOf(candidates)
+      )
+      const startable = servers.filter((server) => !refused.includes(server.name))
+      const leftOut = new Set(refused)
+      let problems = new Map<string, BotToolProblem>()
+      if (startable.length > 0) {
+        const thread = await codexThread(
+          rpc,
+          launch.cli,
+          launch.tools,
+          ownerStdioNames,
+          refused.filter((name) => servers.some((server) => server.name === name))
+        )
+        for (const name of thread.leftOut) {
+          leftOut.add(name)
         }
-        await delay(100, undefined, { signal })
-      } while (Date.now() < deadline)
+        // The status under a left-out name is the owner's own server's, not the bot's.
+        const checked = startable.map(({ name }) => name).filter((name) => !leftOut.has(name))
+        problems = await settledCodexToolProblems(rpc, thread.threadId, checked, signal)
+      }
       return {
         ...withRelayProblems(cli, servers, redactBotToolProblems(problems, servers)),
+        ...Object.fromEntries([...leftOut].map((name) => [name, codexTakenToolProblem(name)])),
         ...taken
       }
     },

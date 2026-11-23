@@ -1,0 +1,152 @@
+import { describe, expect, it, vi } from 'vitest'
+import { CodexAppServerRequestError } from '../codex/app-server/codex-app-server-request-error'
+import {
+  codexRefusedThreadServer,
+  openWithoutRefusedCodexServers,
+  withoutCodexMcpConflicts
+} from './bot-tools-codex-conflicts'
+
+const reading = (answer: unknown) => ({
+  request: vi.fn(async () => (answer instanceof Error ? Promise.reject(answer) : answer))
+})
+
+/** What Codex 0.171 answers a thread whose server has both a command and a URL. */
+const refusal = (method: string, name: string) => {
+  const text = `failed to load configuration: url is not supported for stdio\nin \`mcp_servers.${name}\``
+  return new CodexAppServerRequestError(
+    method,
+    -32600,
+    `codex app-server ${method} failed: ${text}`,
+    text
+  )
+}
+
+describe('withoutCodexMcpConflicts', () => {
+  it('asks Codex nothing when the thread adds no server', async () => {
+    const rpc = reading({ config: {} })
+    const config = { 'mcp_servers.notion.enabled': false, web_search: 'disabled' }
+    expect(await withoutCodexMcpConflicts(rpc, '/work', config)).toEqual({
+      threadConfig: config,
+      leftOut: []
+    })
+    expect(rpc.request).not.toHaveBeenCalled()
+  })
+
+  it('reads the config Codex loads at the thread’s folder', async () => {
+    const rpc = reading({ config: { mcp_servers: {} } })
+    await withoutCodexMcpConflicts(rpc, '/work', { 'mcp_servers.notion.url': 'https://n/mcp' })
+    expect(rpc.request).toHaveBeenCalledWith(
+      'config/read',
+      { cwd: '/work' },
+      { timeoutMs: expect.any(Number) }
+    )
+  })
+
+  it('drops every key of a server whose kind differs from the loaded one', async () => {
+    const rpc = reading({
+      config: { mcp_servers: { notion: { command: 'npx', args: [] }, linear: { url: 'u' } } }
+    })
+    const result = await withoutCodexMcpConflicts(rpc, '/work', {
+      'mcp_servers.notion.url': 'https://n/mcp',
+      'mcp_servers.notion.http_headers': { authorization: 'Bearer t' },
+      'mcp_servers.notionx.url': 'https://x/mcp',
+      'mcp_servers.linear.url': 'https://l/mcp',
+      web_search: 'disabled'
+    })
+    expect(result).toEqual({
+      threadConfig: {
+        'mcp_servers.notionx.url': 'https://x/mcp',
+        'mcp_servers.linear.url': 'https://l/mcp',
+        web_search: 'disabled'
+      },
+      leftOut: ['notion']
+    })
+  })
+
+  it('keeps the thread config as it is when Codex’s config can’t be read', async () => {
+    const config = { 'mcp_servers.notion.url': 'https://n/mcp' }
+    for (const answer of [new Error('refused'), null, { config: { mcp_servers: 'odd' } }]) {
+      expect(await withoutCodexMcpConflicts(reading(answer), '/work', config)).toEqual({
+        threadConfig: config,
+        leftOut: []
+      })
+    }
+  })
+})
+
+describe('codexRefusedThreadServer', () => {
+  const config = { 'mcp_servers.notion.url': 'https://n/mcp', web_search: 'live' }
+
+  it('names a server this config adds that Codex refused to open with', () => {
+    expect(codexRefusedThreadServer(refusal('thread/start', 'notion'), config)).toBe('notion')
+    expect(codexRefusedThreadServer(refusal('thread/resume', 'notion'), config)).toBe('notion')
+  })
+
+  it('names nothing for another error, call, or a server the config doesn’t add', () => {
+    expect(codexRefusedThreadServer(refusal('thread/start', 'linear'), config)).toBeNull()
+    expect(codexRefusedThreadServer(refusal('turn/start', 'notion'), config)).toBeNull()
+    expect(codexRefusedThreadServer(new Error('url is not supported for stdio'), config)).toBeNull()
+    const other = new CodexAppServerRequestError('thread/start', -32600, 'bad', 'bad')
+    expect(codexRefusedThreadServer(other, config)).toBeNull()
+  })
+})
+
+describe('openWithoutRefusedCodexServers', () => {
+  it('opens again without each server Codex refuses, once per server', async () => {
+    const config = {
+      'mcp_servers.notion.url': 'https://n/mcp',
+      'mcp_servers.notion.http_headers': { a: 'b' },
+      'mcp_servers.docs.command': 'npx',
+      'mcp_servers.linear.url': 'https://l/mcp'
+    }
+    const open = vi.fn(async (sent: Record<string, unknown> | undefined) => {
+      if (sent?.['mcp_servers.notion.url']) {
+        throw refusal('thread/start', 'notion')
+      }
+      if (sent?.['mcp_servers.docs.command']) {
+        throw refusal('thread/start', 'docs')
+      }
+      return 'opened'
+    })
+    expect(await openWithoutRefusedCodexServers(config, open)).toEqual({
+      opened: 'opened',
+      leftOut: ['notion', 'docs']
+    })
+    expect(open).toHaveBeenCalledTimes(3)
+    expect(open).toHaveBeenLastCalledWith({ 'mcp_servers.linear.url': 'https://l/mcp' })
+  })
+
+  it('keeps a key turning the refused name off', async () => {
+    const config = {
+      'mcp_servers.notion.url': 'https://n/mcp',
+      'mcp_servers.notion.enabled': false
+    }
+    const open = vi.fn(async (sent: Record<string, unknown> | undefined) => {
+      if (sent?.['mcp_servers.notion.url']) {
+        throw refusal('thread/start', 'notion')
+      }
+      return 'opened'
+    })
+    await openWithoutRefusedCodexServers(config, open)
+    expect(open).toHaveBeenLastCalledWith({ 'mcp_servers.notion.enabled': false })
+  })
+
+  it('passes any other failure on without opening again', async () => {
+    const failure = new Error('spawn failed')
+    const open = vi.fn(async () => {
+      throw failure
+    })
+    await expect(
+      openWithoutRefusedCodexServers({ 'mcp_servers.notion.url': 'u' }, open)
+    ).rejects.toBe(failure)
+    const unrelated = refusal('thread/start', 'linear')
+    const again = vi.fn(async () => {
+      throw unrelated
+    })
+    await expect(
+      openWithoutRefusedCodexServers({ 'mcp_servers.notion.url': 'u' }, again)
+    ).rejects.toBe(unrelated)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(again).toHaveBeenCalledTimes(1)
+  })
+})
