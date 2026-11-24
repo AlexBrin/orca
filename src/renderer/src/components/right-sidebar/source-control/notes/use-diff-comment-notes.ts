@@ -14,6 +14,10 @@ import {
   type PendingDiffCommentsClear
 } from './diff-comments-clear-dialog-state'
 import { useCopyFeedbackState } from './copy-feedback'
+import {
+  dismissClearNotesFailedToast,
+  showClearNotesFailedToast
+} from '@/store/slices/diff-comments/clear-notes-failed-toast'
 
 export function useSourceControlDiffCommentNotes({
   activeWorktreeId,
@@ -112,14 +116,10 @@ export function useSourceControlDiffCommentNotes({
     try {
       const ok = await deleteDiffCommentsByIds(pending.owner, pending.ids)
       if (ok) {
+        dismissClearNotesFailedToast()
         setPendingDiffCommentsClear(null)
       } else {
-        toast.error(
-          translate(
-            'auto.components.right.sidebar.SourceControl.eae7a1da5f',
-            'Failed to clear notes.'
-          )
-        )
+        showClearNotesFailedToast()
       }
     } finally {
       setIsClearingDiffComments(false)
