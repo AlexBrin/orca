@@ -76,7 +76,7 @@ export async function botQuestionNotices(
   const outcome = taker.startsWith('dropped:') ? 'dropped' : 'unanswered'
   return ({ messageId }) => {
     const message = db.getMessageById(messageId)
-    return !message || tellSender(runtime, db, message, outcome, why, reason)
+    return !message || tellSender(runtime, db, message, { outcome, why, reason })
       ? 'told'
       : 'unverified'
   }
