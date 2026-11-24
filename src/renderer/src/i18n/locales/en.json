@@ -22850,6 +22850,7 @@
       },
       "workerDock": {
         "commandOutputPending": "Command output is not available yet.",
+        "copyCommand": "Copy command",
         "notNow": "Not now",
         "retry": "Retry",
         "dismiss": "Dismiss",
