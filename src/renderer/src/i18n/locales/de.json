@@ -21517,7 +21517,8 @@
         "copyNotes": "Notizen kopieren",
         "clearPageNotes_other": "{{count}} Notizen von dieser Seite löschen?",
         "sendNotesToAgent_other": "{{count}} Notizen an einen Agenten senden",
-        "retryClear": "Wiederholen"
+        "sentNotesStillListed": "Notizen gesendet, aber noch in der Liste.",
+        "removeSentNotes": "Entfernen"
       }
     }
   },
