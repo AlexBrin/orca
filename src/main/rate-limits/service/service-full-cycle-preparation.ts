@@ -204,6 +204,14 @@ export abstract class RateLimitServiceFullCyclePreparation extends RateLimitServ
       !this.isClaudeOAuthUsageEnabled() ||
       claudeGeneration !== this.claudeFetchGeneration ||
       (!options?.force && this.shouldSkipAutomatedFetch('claude', previousState.claude))
+    // A Retry-After hold can expire during preparation, so pace the read from here.
+    if (
+      !claudeFetchGated &&
+      !options?.force &&
+      previousState.claude?.usageMetadata?.retryAtMs !== undefined
+    ) {
+      this.lastActiveFailureRetryAtByProvider.claude = Date.now()
+    }
     const [claudeResult, codexResult, geminiResult, opencodeGoResult, kimiResult, miniMaxResult] =
       await Promise.allSettled([
         claudeFetchGated
@@ -289,6 +297,7 @@ export abstract class RateLimitServiceFullCyclePreparation extends RateLimitServ
       zcodeConfigChanged,
       zcodeGeneration,
       antigravityGeneration,
+      antigravityFetchAllowed,
       claudeFetchGated,
       results: [
         claudeResult,
