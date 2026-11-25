@@ -20813,6 +20813,7 @@
         "openFullPage": "Ouvrir la page",
         "onAgent": "avec {{name}}",
         "open": "Ouvrir",
+        "openNamed": "Ouvrir {{name}}",
         "savedWhen": "Enregistrée : {{when}}"
       },
       "mcp": {

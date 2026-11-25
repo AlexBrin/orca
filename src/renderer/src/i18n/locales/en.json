@@ -22309,6 +22309,7 @@
         "openFullPage": "Open page",
         "onAgent": "on {{name}}",
         "open": "Open",
+        "openNamed": "Open {{name}}",
         "savedWhen": "Saved: {{when}}"
       },
       "botContext": {

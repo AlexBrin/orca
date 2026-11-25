@@ -20800,6 +20800,7 @@
         "openFullPage": "Seite öffnen",
         "onAgent": "mit {{name}}",
         "open": "Öffnen",
+        "openNamed": "{{name}} öffnen",
         "savedWhen": "Gespeichert: {{when}}"
       },
       "usageLimitActions": {

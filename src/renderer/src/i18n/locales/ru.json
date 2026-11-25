@@ -21494,6 +21494,7 @@
         "openFullPage": "Открыть страницу",
         "onAgent": "на {{name}}",
         "open": "Открыть",
+        "openNamed": "Открыть {{name}}",
         "savedWhen": "Сохранено: {{when}}"
       },
       "usageLimitActions": {
