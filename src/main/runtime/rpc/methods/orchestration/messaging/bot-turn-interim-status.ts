@@ -17,7 +17,7 @@ export async function readBotTurnInterimStatus(
 }
 
 /** Read from that turn's message and turn rows alone, never its tool output or the chat before it. */
-export async function readTurnInterimLine(
+async function readTurnInterimLine(
   reads: Pick<JournalSqlReads, 'operationWindow'>,
   turnId: string
 ): Promise<string | null> {
