@@ -62,12 +62,16 @@ export function recordBotAnswer(
   return { posted: before === 'posted' }
 }
 
-/** Notes that the sender was told the request is queued; true only the first time. */
+/** Notes that the sender was told the request is queued; true only the first time, and never once
+ *  the request has an outcome (a settlement that raced this one already told how it ended). */
 export function recordBotRequestPendingNotice(this: OrchestrationDb, messageId: string): boolean {
   return (
     this.db
-      .prepare('INSERT OR IGNORE INTO bot_request_pending_notices (message_id) VALUES (?)')
-      .run(messageId).changes > 0
+      .prepare(
+        `INSERT OR IGNORE INTO bot_request_pending_notices (message_id)
+         SELECT ? WHERE NOT EXISTS (SELECT 1 FROM bot_request_outcomes WHERE message_id = ?)`
+      )
+      .run(messageId, messageId).changes > 0
   )
 }
 

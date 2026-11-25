@@ -14,6 +14,8 @@ const MATCHES_MAX = 200
 const EXTRA_WORDS_MAX = 4
 const NAMED_MAX = 3
 const LINE_MAX = 1024
+// The warning is advice: a stalled disk (a network home folder) never holds the send past this.
+const LOOKUP_MAX_MS = 2000
 const PATH_START = /(?:^|[\s"'`(<[=])((?:~|[A-Za-z]:)?[\\/])/g
 const TRAILING = /[.,;:!?"'`)>\]]+$/
 // "file.ts:42:7" names file.ts.
@@ -38,7 +40,10 @@ function candidates(body: string): string[][] {
     const from = match.index + match[0].length - match[1].length
     // Only the rest of this line, bounded: a long body (a pasted diff) has many path-like starts.
     const end = body.indexOf('\n', from)
-    const line = body.slice(from, Math.min(end === -1 ? body.length : end, from + LINE_MAX))
+    const line = body
+      .slice(from, Math.min(end === -1 ? body.length : end, from + LINE_MAX))
+      // A CRLF body's line ends in "\r", which no file name does.
+      .replace(/\r$/, '')
     const words = line.split(/[ \t]+/).slice(0, EXTRA_WORDS_MAX + 1)
     const readings = words
       .map((_, count) =>
@@ -82,14 +87,22 @@ export async function localPathWarning(
   if (starts.length === 0) {
     return null
   }
-  const found = await Promise.all(
+  const lookup = Promise.all(
     starts.map(async (readings) => {
       const real = await Promise.all(readings.map(exists))
       // The longest reading that exists is the path the body names.
       return readings.findLast((_, index) => real[index]) ?? null
     })
   )
-  const local = [...new Set(found.filter((path) => path !== null))]
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const found = await Promise.race([
+    lookup,
+    new Promise<null>((done) => {
+      timer = setTimeout(() => done(null), LOOKUP_MAX_MS)
+    })
+  ]).finally(() => clearTimeout(timer))
+  // Too slow to wait on: the send goes without the warning, and the stat calls finish on their own.
+  const local = [...new Set((found ?? []).filter((path) => path !== null))]
   if (local.length === 0) {
     return null
   }

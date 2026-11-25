@@ -57,10 +57,19 @@ describe('a turn that ends on an interim status', () => {
       'Queued FIFO.',
       'lgtm. Queued behind item 3 for the merge train.',
       'Approved; queued behind the release.',
-      'Queued behind item 4. Here is the full answer you asked for. It covers both parts. That is all.'
+      'Queued behind item 4. Here is the full answer you asked for. It covers both parts. That is all.',
+      'Here is the answer: messages queued behind a blocked item cannot be delivered.'
     ]) {
       expect(botRequestInterimLine(answer)).toBeNull()
     }
+  })
+
+  it('reads a long status whose verdict came before its tail as no interim status', () => {
+    expect(
+      botRequestInterimLine(
+        `Verdict: PASS. ${'Detail. '.repeat(800)}A follow-up review is queued behind item 9.`
+      )
+    ).toBeNull()
   })
 
   it('reads a refusal with a typographic apostrophe as one', () => {

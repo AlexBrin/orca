@@ -216,10 +216,11 @@ async function settleBotRequests(
   if (messages.length === 0) {
     return
   }
-  // A turn that closed on "accepted, queued" took them: the sender hears that once, and the answer
+  // A turn that closed on "accepted, queued" took it: the sender hears that once, and the answer
   // or a later turn's failure still counts. Read only here, on a turn that left a request open.
+  // The status names no request, so it stands only for a turn that left exactly one open.
   const pending =
-    why === 'ended'
+    why === 'ended' && messages.length === 1
       ? await readBotTurnInterimStatus(runtime, sessionId, turnId).catch(() => null)
       : null
   await ensureSenderRecords(runtime, messages)

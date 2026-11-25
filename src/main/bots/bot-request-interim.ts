@@ -3,7 +3,7 @@
 import { BOT_QUIET_MARKER } from '../../shared/bot-quiet-result'
 
 const LINE_MAX = 240
-// Only the end of a long turn is its closing status.
+// Only the end of a long turn holds its closing status; verdicts and refusals are read in full.
 const TAIL_MAX = 4000
 
 // Only the closing status counts: a full answer that mentions a queue earlier is still an answer.
@@ -14,7 +14,9 @@ const CLOSING_SENTENCES = 3
 // queue ("messages are queued for delivery", "Queued FIFO.") is not one.
 const PENDING = new RegExp(
   [
-    String.raw`\bqueued (?:fifo )?behind\b`,
+    // Said of this request: opening its clause ("Queued behind…", "…; queued behind…") or after
+    // "is"/"was"/"I've", never of other things ("messages queued behind a blocked item…").
+    String.raw`(?:^|[;:,]\s*|\b(?:is|was|been|now|it's|i've|we've|i have|we have)\s+)queued (?:fifo )?behind\b`,
     String.raw`\bqueued (?:it |this |your \w+ )?as (?:item |#|number |no\.? ?)\d+`,
     String.raw`\b(?:i|we)(?:'ve| have)? queued (?:it|this|your)\b`,
     String.raw`\b(?:your|this|the) (?:request|review|question|handoff|ask|job) (?:is|was|has been|'s) (?:now )?(?:queued|in (?:the |my )?queue)\b`,
@@ -39,16 +41,18 @@ const VERDICT_WORD = /\bPASS(?:ED)?\b/
 /** The line saying the request is taken and pending, cut for a notice; null for any other ending. */
 export function botRequestInterimLine(text: string): string | null {
   // Model prose often writes a typographic apostrophe: "can’t".
-  const tail = text.trim().slice(-TAIL_MAX).replaceAll('\u2019', "'")
+  const full = text.trim().replaceAll('\u2019', "'")
+  // A verdict or refusal anywhere voids it, even one a long status pushed out of the tail.
   if (
-    !tail ||
-    tail === BOT_QUIET_MARKER ||
-    REFUSAL.test(tail) ||
-    VERDICT.test(tail) ||
-    VERDICT_WORD.test(tail)
+    !full ||
+    full === BOT_QUIET_MARKER ||
+    REFUSAL.test(full) ||
+    VERDICT.test(full) ||
+    VERDICT_WORD.test(full)
   ) {
     return null
   }
+  const tail = full.slice(-TAIL_MAX)
   const line = tail
     .split(/\n+|(?<=[.!?])\s+/)
     .map((part) => part.trim())

@@ -19,6 +19,14 @@ describe('local paths in mail to another computer', () => {
     ).toContain(`names ${file} on this computer`)
   })
 
+  it('names a file at the end of a CRLF line', async () => {
+    const file = join(dir, 'brief.md')
+    writeFileSync(file, '')
+    expect((await localPathWarning(`See ${file}\r\nNext.`, 'bot:Docs', 'm4'))?.message).toContain(
+      `names ${file} on this computer`
+    )
+  })
+
   it('names no bare home or temp folder', async () => {
     expect(
       await localPathWarning(`Scratch lives in ${tmpdir()} and ~/ here.`, 'bot:Docs', 'm4')
